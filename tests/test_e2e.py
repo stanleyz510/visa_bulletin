@@ -16,7 +16,7 @@ from fetch import extract_bulletin_url_from_landing_page
 from persist import save_to_json, load_from_json
 
 # Path to test fixtures
-FIXTURES_DIR = Path(__file__).parent / "e2e_test"
+FIXTURES_DIR = Path(__file__).parent / "e2e_test_data"
 LANDING_PAGE_HTML = FIXTURES_DIR / "20250124.html"
 
 
