@@ -6,6 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
+# DB
+visa_bulletin.db
+visa_bulletin.db-wal
+visa_bulletin.db-shm
+
+
 # Distribution / packaging
 .Python
 build/

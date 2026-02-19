@@ -7,6 +7,7 @@ subscription/notification features.
 
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +42,24 @@ CREATE INDEX IF NOT EXISTS idx_runs_type_success_started
     ON runs (run_type, success, started_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_comparisons_run_id ON comparisons (run_id);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id                INTEGER PRIMARY KEY,
+    email             TEXT    NOT NULL UNIQUE,
+    categories        TEXT    NOT NULL,
+    subscribed_at     TEXT    NOT NULL,
+    updated_at        TEXT,
+    ip_address        TEXT,
+    user_agent        TEXT,
+    is_active         INTEGER NOT NULL DEFAULT 1,
+    unsubscribe_token TEXT    NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_active
+    ON subscriptions (is_active);
+
+CREATE INDEX IF NOT EXISTS idx_subscriptions_token
+    ON subscriptions (unsubscribe_token);
 """
 
 
@@ -90,7 +109,7 @@ def generate_run_id(conn: sqlite3.Connection, table: str = "runs") -> int:
 
     Args:
         conn: Active SQLite connection
-        table: Table name to check for existing IDs ('runs' or 'comparisons')
+        table: Table name to check for existing IDs ('runs', 'comparisons', or 'subscriptions')
 
     Returns:
         A unique 17-digit integer ID
@@ -325,3 +344,160 @@ def get_runs(
     except Exception as e:
         print(f"[ERROR] Failed to retrieve runs: {str(e)}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# Subscription functions
+# ---------------------------------------------------------------------------
+
+
+def upsert_subscription(
+    conn: sqlite3.Connection,
+    email: str,
+    categories: List[str],
+    subscribed_at: str,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Insert a new subscription or update an existing one for the same email.
+
+    Returns a dict with keys:
+      - id: subscription integer ID
+      - status: 'created' | 'updated' | 'resubscribed'
+      - email: the email address
+      - categories: current list of subscribed categories
+      - previous_categories: old list before update (None if status == 'created')
+      - unsubscribe_token: UUID4 string for the one-click unsubscribe link
+
+    Args:
+        conn: Active SQLite connection
+        email: Subscriber email address
+        categories: List of visa category keys, e.g. ['EB-2', 'F2A']
+        subscribed_at: ISO-8601 UTC timestamp of this request
+        ip_address: Client IP address (may be None)
+        user_agent: Browser User-Agent string (may be None)
+    """
+    categories_json = json.dumps(categories, ensure_ascii=False, separators=(",", ":"))
+
+    existing = get_subscription_by_email(conn, email)
+
+    if existing is None:
+        sub_id = generate_run_id(conn, "subscriptions")
+        token = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO subscriptions
+                (id, email, categories, subscribed_at, ip_address, user_agent,
+                 is_active, unsubscribe_token)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            """,
+            (sub_id, email, categories_json, subscribed_at, ip_address, user_agent, token),
+        )
+        conn.commit()
+        return {
+            "id": sub_id,
+            "status": "created",
+            "email": email,
+            "categories": categories,
+            "previous_categories": None,
+            "unsubscribe_token": token,
+        }
+    else:
+        was_active = existing["is_active"] == 1
+        previous_categories = existing["categories"]
+        conn.execute(
+            """
+            UPDATE subscriptions
+               SET categories = ?, updated_at = ?, ip_address = ?,
+                   user_agent = ?, is_active = 1
+             WHERE email = ?
+            """,
+            (categories_json, subscribed_at, ip_address, user_agent, email),
+        )
+        conn.commit()
+        status = "updated" if was_active else "resubscribed"
+        return {
+            "id": existing["id"],
+            "status": status,
+            "email": email,
+            "categories": categories,
+            "previous_categories": previous_categories,
+            "unsubscribe_token": existing["unsubscribe_token"],
+        }
+
+
+def get_subscription_by_email(
+    conn: sqlite3.Connection,
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Return the subscription row for the given email (regardless of is_active),
+    or None if no row exists.
+
+    The 'categories' key is returned as a Python list (deserialized from JSON).
+    """
+    row = conn.execute(
+        "SELECT * FROM subscriptions WHERE email = ?", (email,)
+    ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    result["categories"] = json.loads(result["categories"])
+    return result
+
+
+def get_active_subscriptions_for_category(
+    conn: sqlite3.Connection,
+    category_key: str,
+) -> List[Dict[str, Any]]:
+    """
+    Return all active subscriptions that include the given category key.
+
+    Uses SQLite's json_each() to query the categories JSON array efficiently.
+    The 'categories' key in each returned dict is a Python list.
+
+    Args:
+        conn: Active SQLite connection
+        category_key: A visa category key, e.g. 'EB-2' or 'F2A'
+    """
+    rows = conn.execute(
+        """
+        SELECT s.*
+          FROM subscriptions s, json_each(s.categories) cat
+         WHERE cat.value = ? AND s.is_active = 1
+        """,
+        (category_key,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["categories"] = json.loads(d["categories"])
+        result.append(d)
+    return result
+
+
+def deactivate_subscription(
+    conn: sqlite3.Connection,
+    unsubscribe_token: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Mark a subscription as inactive (is_active = 0) using the unsubscribe token.
+
+    Returns the subscription dict (with 'categories' as a list) if found and
+    deactivated, or None if no active subscription matches the token.
+    """
+    row = conn.execute(
+        "SELECT * FROM subscriptions WHERE unsubscribe_token = ? AND is_active = 1",
+        (unsubscribe_token,),
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE subscriptions SET is_active = 0 WHERE unsubscribe_token = ?",
+        (unsubscribe_token,),
+    )
+    conn.commit()
+    result = dict(row)
+    result["categories"] = json.loads(result["categories"])
+    return result

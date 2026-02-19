@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unsubscribed – Visa Bulletin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f4f6f9;
+      color: #1a1a2e;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 16px rgba(0,0,0,.10);
+      max-width: 440px;
+      width: 100%;
+      padding: 2.5rem 2.5rem;
+      text-align: center;
+    }
+
+    .icon {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: .5rem;
+    }
+
+    .email {
+      font-weight: 600;
+      color: #374151;
+      word-break: break-all;
+    }
+
+    p {
+      font-size: .93rem;
+      color: #6b7280;
+      line-height: 1.6;
+      margin-top: .75rem;
+    }
+
+    a {
+      display: inline-block;
+      margin-top: 1.75rem;
+      padding: .6rem 1.4rem;
+      background: #3b82f6;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: .9rem;
+      font-weight: 600;
+      transition: background .15s;
+    }
+
+    a:hover { background: #2563eb; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">&#10003;</div>
+  <h1>You've been unsubscribed</h1>
+  <p>
+    <span class="email">{{ email }}</span> has been removed from
+    the Visa Bulletin notification list.
+  </p>
+  <p>You will no longer receive cutoff-date alerts.</p>
+  <a href="/">Re-subscribe</a>
+</div>
+</body>
+</html>
