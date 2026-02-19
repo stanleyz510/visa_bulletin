@@ -23,7 +23,7 @@ def run_all_tests(verbosity=2):
     start_dir = Path(__file__).parent
     suite = loader.discover(start_dir, pattern='test_*.py')
 
-    runner = unittest.TextTestRunner(verbosity=verbosity)
+    runner = unittest.TextTestRunner(verbosity=verbosity, buffer=True)
     result = runner.run(suite)
 
     # Return exit code based on results

@@ -29,6 +29,8 @@ except ImportError:
 
 from parser import parse_bulletin_html
 from persist import save_to_json, save_with_timestamp, load_from_json, format_data_for_display
+from store import DEFAULT_DB_PATH, init_db, get_connection, insert_run, get_last_successful_run, insert_comparison, get_runs
+from compare import compare_bulletins, format_comparison_for_display
 
 
 # Constants
@@ -183,22 +185,57 @@ def scrape_visa_bulletin(
     use_timestamp: bool = False,
     verbose: bool = False,
     display: bool = False,
-    debug: bool = False
+    debug: bool = False,
+    run_type: str = "official",
+    db_path: str = DEFAULT_DB_PATH,
+    use_db: bool = True,
+    do_compare: bool = False,
 ) -> bool:
     """
     Main scraping orchestration function.
     Fetches, parses, and saves visa bulletin data.
-    
+
     Args:
         output_file: Path to output JSON file
         use_timestamp: Add timestamp to filename
         verbose: Enable verbose logging
         display: Display results after saving
         debug: Enable debug mode (saves HTML for inspection)
-        
+        run_type: Tag this run ('official', 'test', 'benchmark', 'manual')
+        db_path: Path to the SQLite database file
+        use_db: If False, skip all database operations (JSON-only mode)
+        do_compare: Compare this run against the previous run of the same type
+
     Returns:
         True if successful, False otherwise
     """
+    started_at = datetime.utcnow().isoformat()
+
+    def _record_failure(error_message: str) -> None:
+        """Record a failed run in the DB if use_db is enabled."""
+        if not use_db:
+            return
+        try:
+            completed_at = datetime.utcnow().isoformat()
+            with get_connection(db_path) as conn:
+                insert_run(
+                    conn,
+                    run_type=run_type,
+                    started_at=started_at,
+                    success=False,
+                    error_message=error_message,
+                    completed_at=completed_at,
+                    verbose=verbose,
+                )
+        except Exception as e:
+            print(f"[STORE] Warning: could not record failed run: {e}")
+
+    if use_db:
+        try:
+            init_db(db_path, verbose=verbose)
+        except Exception as e:
+            print(f"[STORE] Warning: could not initialize database: {e}")
+
     if verbose:
         print("[MAIN] Starting visa bulletin scraper...")
         print(f"[MAIN] Target URL: {VISA_BULLETIN_URL}")
@@ -207,6 +244,7 @@ def scrape_visa_bulletin(
     html_content = fetch_bulletin_page(VISA_BULLETIN_URL, verbose)
     if not html_content:
         print("[ERROR] Failed to fetch landing page. Exiting.")
+        _record_failure("Failed to fetch landing page")
         return False
 
     # Step 1.5: Extract bulletin URL from landing page
@@ -219,6 +257,7 @@ def scrape_visa_bulletin(
         print("[HELP] The landing page structure may have changed.")
         if debug:
             print("[DEBUG] Landing page HTML saved for inspection.")
+        _record_failure("Failed to extract bulletin URL from landing page")
         return False
 
     if verbose:
@@ -231,33 +270,37 @@ def scrape_visa_bulletin(
     html_content = fetch_bulletin_page(bulletin_url, verbose)
     if not html_content:
         print("[ERROR] Failed to fetch bulletin page. Exiting.")
+        _record_failure(f"Failed to fetch bulletin page: {bulletin_url}")
         return False
 
     # Step 3: Parse the bulletin HTML
     if verbose:
         print("[MAIN] Parsing bulletin HTML content...")
-    
+
     data = parse_bulletin_html(html_content, verbose, debug)
     if not data:
         print("[ERROR] Failed to parse HTML content. Exiting.")
+        _record_failure("Failed to parse bulletin HTML")
         return False
 
     # Step 4: Save to JSON
     if verbose:
         print("[MAIN] Saving extracted data...")
-    
+
     if use_timestamp:
         saved_path = save_with_timestamp(data, verbose=verbose)
         if not saved_path:
             print("[ERROR] Failed to save data. Exiting.")
+            _record_failure("Failed to save timestamped JSON file")
             return False
     else:
         output_path = output_file or DEFAULT_OUTPUT_FILE
         if not save_to_json(data, output_path, verbose):
             print("[ERROR] Failed to save data. Exiting.")
+            _record_failure(f"Failed to save JSON to {output_path}")
             return False
         saved_path = output_path
-    
+
     if verbose:
         print(f"[MAIN] Data successfully saved to: {saved_path}")
 
@@ -270,7 +313,43 @@ def scrape_visa_bulletin(
         if loaded_data:
             print(format_data_for_display(loaded_data))
         print("=" * 60 + "\n")
-    
+
+    # Step 6: Record run in DB and optionally compare with previous run
+    if use_db:
+        try:
+            completed_at = datetime.utcnow().isoformat()
+            with get_connection(db_path) as conn:
+                run_id = insert_run(
+                    conn,
+                    run_type=run_type,
+                    started_at=started_at,
+                    success=True,
+                    bulletin_date=data.get("bulletin_date"),
+                    source_url=bulletin_url,
+                    data=data,
+                    completed_at=completed_at,
+                    verbose=verbose,
+                )
+                if do_compare:
+                    prev = get_last_successful_run(
+                        conn, run_type, exclude_run_id=run_id, verbose=verbose
+                    )
+                    if prev is not None:
+                        diff = compare_bulletins(data, prev["data"])
+                        insert_comparison(
+                            conn,
+                            run_id=run_id,
+                            previous_run_id=prev["id"],
+                            compared_at=diff["compared_at"],
+                            diff=diff,
+                            verbose=verbose,
+                        )
+                        print(format_comparison_for_display(diff))
+                    else:
+                        print("[STORE] No previous run found for comparison.")
+        except Exception as e:
+            print(f"[STORE] Warning: could not record run in database: {e}")
+
     return True
 
 
@@ -319,7 +398,40 @@ Examples:
         action='store_true',
         help='Enable debug mode (saves HTML for inspection if parsing fails)'
     )
-    
+
+    parser.add_argument(
+        '--run-type',
+        type=str,
+        default='official',
+        choices=['official', 'test', 'benchmark', 'manual'],
+        help='Tag this run with a type for historical tracking (default: official)'
+    )
+
+    parser.add_argument(
+        '--db',
+        type=str,
+        default=DEFAULT_DB_PATH,
+        help=f'Path to the SQLite database file (default: {DEFAULT_DB_PATH})'
+    )
+
+    parser.add_argument(
+        '--no-db',
+        action='store_true',
+        help='Skip database storage and operate in JSON-only mode'
+    )
+
+    parser.add_argument(
+        '--compare',
+        action='store_true',
+        help='Compare this run against the previous run of the same type and print diff'
+    )
+
+    parser.add_argument(
+        '--history',
+        action='store_true',
+        help='Print the last 10 runs from the database and exit'
+    )
+
     return parser
 
 
@@ -327,18 +439,40 @@ def main():
     """Main entry point."""
     parser = create_argument_parser()
     args = parser.parse_args()
-    
+
     try:
+        if args.history:
+            init_db(args.db, verbose=args.verbose)
+            with get_connection(args.db) as conn:
+                runs = get_runs(conn, limit=10, verbose=args.verbose)
+            if not runs:
+                print("No runs recorded yet.")
+            else:
+                print(f"{'ID':<20}  {'TYPE':<10}  {'SUCCESS':<8}  {'BULLETIN':<20}  STARTED")
+                print("-" * 80)
+                for r in runs:
+                    success_str = "yes" if r["success"] else "no"
+                    bulletin = r["bulletin_date"] or "(none)"
+                    print(
+                        f"{r['id']:<20}  {r['run_type']:<10}  {success_str:<8}  "
+                        f"{bulletin:<20}  {r['started_at']}"
+                    )
+            sys.exit(0)
+
         success = scrape_visa_bulletin(
             output_file=args.output if not args.timestamp else None,
             use_timestamp=args.timestamp,
             verbose=args.verbose,
             display=args.display,
-            debug=args.debug
+            debug=args.debug,
+            run_type=args.run_type,
+            db_path=args.db,
+            use_db=not args.no_db,
+            do_compare=args.compare,
         )
-        
+
         sys.exit(0 if success else 1)
-    
+
     except KeyboardInterrupt:
         print("\n[INFO] Scraper interrupted by user")
         sys.exit(1)
