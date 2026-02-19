@@ -15,7 +15,7 @@ Usage:
 import argparse
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -209,14 +209,14 @@ def scrape_visa_bulletin(
     Returns:
         True if successful, False otherwise
     """
-    started_at = datetime.utcnow().isoformat()
+    started_at = datetime.now(timezone.utc).isoformat()
 
     def _record_failure(error_message: str) -> None:
         """Record a failed run in the DB if use_db is enabled."""
         if not use_db:
             return
         try:
-            completed_at = datetime.utcnow().isoformat()
+            completed_at = datetime.now(timezone.utc).isoformat()
             with get_connection(db_path) as conn:
                 insert_run(
                     conn,
@@ -317,7 +317,7 @@ def scrape_visa_bulletin(
     # Step 6: Record run in DB and optionally compare with previous run
     if use_db:
         try:
-            completed_at = datetime.utcnow().isoformat()
+            completed_at = datetime.now(timezone.utc).isoformat()
             with get_connection(db_path) as conn:
                 run_id = insert_run(
                     conn,
@@ -402,7 +402,7 @@ Examples:
     parser.add_argument(
         '--run-type',
         type=str,
-        default='official',
+        default='manual',
         choices=['official', 'test', 'benchmark', 'manual'],
         help='Tag this run with a type for historical tracking (default: official)'
     )

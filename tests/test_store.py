@@ -234,7 +234,7 @@ class TestGetLastSuccessfulRun(unittest.TestCase):
 
     def _insert(self, run_type="official", success=True, started_at=None, data=None):
         if started_at is None:
-            started_at = datetime.utcnow().isoformat()
+            started_at = datetime.now(timezone.utc).isoformat()
         with get_connection(self.db_path) as conn:
             return insert_run(
                 conn,

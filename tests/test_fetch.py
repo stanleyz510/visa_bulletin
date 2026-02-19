@@ -200,9 +200,9 @@ class TestNewCliArguments(unittest.TestCase):
         parser = create_argument_parser()
         return parser.parse_args(args)
 
-    def test_run_type_default_is_official(self):
+    def test_run_type_default_is_manual(self):
         args = self._parse([])
-        self.assertEqual(args.run_type, "official")
+        self.assertEqual(args.run_type, "manual")
 
     def test_run_type_accepts_valid_values(self):
         for rtype in ("official", "test", "benchmark", "manual"):
