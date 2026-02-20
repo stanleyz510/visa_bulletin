@@ -190,7 +190,7 @@ def scrape_visa_bulletin(
     db_path: str = DEFAULT_DB_PATH,
     use_db: bool = True,
     do_compare: bool = False,
-) -> bool:
+) -> tuple:
     """
     Main scraping orchestration function.
     Fetches, parses, and saves visa bulletin data.
@@ -207,7 +207,7 @@ def scrape_visa_bulletin(
         do_compare: Compare this run against the previous run of the same type
 
     Returns:
-        True if successful, False otherwise
+        Tuple of (success: bool, run_id: Optional[int], data: Optional[dict])
     """
     started_at = datetime.now(timezone.utc).isoformat()
 
@@ -245,7 +245,7 @@ def scrape_visa_bulletin(
     if not html_content:
         print("[ERROR] Failed to fetch landing page. Exiting.")
         _record_failure("Failed to fetch landing page")
-        return False
+        return False, None, None
 
     # Step 1.5: Extract bulletin URL from landing page
     if verbose:
@@ -258,7 +258,7 @@ def scrape_visa_bulletin(
         if debug:
             print("[DEBUG] Landing page HTML saved for inspection.")
         _record_failure("Failed to extract bulletin URL from landing page")
-        return False
+        return False, None, None
 
     if verbose:
         print(f"[MAIN] Found bulletin URL: {bulletin_url}")
@@ -271,7 +271,7 @@ def scrape_visa_bulletin(
     if not html_content:
         print("[ERROR] Failed to fetch bulletin page. Exiting.")
         _record_failure(f"Failed to fetch bulletin page: {bulletin_url}")
-        return False
+        return False, None, None
 
     # Step 3: Parse the bulletin HTML
     if verbose:
@@ -281,7 +281,7 @@ def scrape_visa_bulletin(
     if not data:
         print("[ERROR] Failed to parse HTML content. Exiting.")
         _record_failure("Failed to parse bulletin HTML")
-        return False
+        return False, None, None
 
     # Step 4: Save to JSON
     if verbose:
@@ -292,13 +292,13 @@ def scrape_visa_bulletin(
         if not saved_path:
             print("[ERROR] Failed to save data. Exiting.")
             _record_failure("Failed to save timestamped JSON file")
-            return False
+            return False, None, None
     else:
         output_path = output_file or DEFAULT_OUTPUT_FILE
         if not save_to_json(data, output_path, verbose):
             print("[ERROR] Failed to save data. Exiting.")
             _record_failure(f"Failed to save JSON to {output_path}")
-            return False
+            return False, None, None
         saved_path = output_path
 
     if verbose:
@@ -315,6 +315,7 @@ def scrape_visa_bulletin(
         print("=" * 60 + "\n")
 
     # Step 6: Record run in DB and optionally compare with previous run
+    run_id: Optional[int] = None
     if use_db:
         try:
             completed_at = datetime.now(timezone.utc).isoformat()
@@ -350,7 +351,7 @@ def scrape_visa_bulletin(
         except Exception as e:
             print(f"[STORE] Warning: could not record run in database: {e}")
 
-    return True
+    return True, run_id, data
 
 
 def create_argument_parser() -> argparse.ArgumentParser:
@@ -459,7 +460,7 @@ def main():
                     )
             sys.exit(0)
 
-        success = scrape_visa_bulletin(
+        success, _run_id, _data = scrape_visa_bulletin(
             output_file=args.output if not args.timestamp else None,
             use_timestamp=args.timestamp,
             verbose=args.verbose,

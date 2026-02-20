@@ -255,6 +255,40 @@ def get_last_successful_run(
         return None
 
 
+def get_run_by_id(
+    run_id: int,
+    db_path: str = DEFAULT_DB_PATH,
+    verbose: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """
+    Return a single run row by ID, with data_json deserialised into 'data'.
+    Returns None if no run with that ID exists.
+
+    Args:
+        run_id: The integer run ID to look up
+        db_path: Path to the SQLite database file
+        verbose: Enable verbose logging
+    """
+    try:
+        with get_connection(db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            if verbose:
+                print(f"[STORE] No run found with id={run_id}")
+            return None
+        result = dict(row)
+        result["data"] = json.loads(result["data_json"]) if result["data_json"] else None
+        if verbose:
+            print(f"[STORE] Found run {run_id} (bulletin: {result['bulletin_date']})")
+        return result
+    except Exception as e:
+        print(f"[ERROR] Failed to query run by id: {str(e)}")
+        return None
+
+
 def insert_comparison(
     conn: sqlite3.Connection,
     run_id: int,

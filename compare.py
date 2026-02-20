@@ -18,8 +18,21 @@ _IDENTITY_KEYS = frozenset(
         "family_preference",
         "employment_preference",
         "category",
+        # Actual parser output keys
+        "family-sponsored",
+        "employment-based",
+        "region",
     }
 )
+
+# Maps employment-based ordinals to subscription codes
+_EB_ORDINAL_TO_CODE = {
+    "1st": "EB-1",
+    "2nd": "EB-2",
+    "3rd": "EB-3",
+    "4th": "EB-4",
+    "5th": "EB-5",
+}
 
 # String values that mean "immediately available / no backlog"
 _CURRENT_VALUES = frozenset({"c", "current"})
@@ -30,6 +43,30 @@ _DATE_FORMATS = ("%d %b %y", "%d%b%y", "%d %b %Y", "%d%b%Y")
 
 def _derive_category_key(category: Dict[str, Any]) -> str:
     """Return the stable identity key for a category row."""
+    # Family-sponsored: value IS the subscription code (F1, F2A, F2B, F3, F4)
+    fs = category.get("family-sponsored")
+    if fs:
+        return str(fs).strip()
+
+    # Employment-based: map ordinal to EB code
+    eb = category.get("employment-based")
+    if eb:
+        eb_clean = str(eb).strip()
+        code = _EB_ORDINAL_TO_CODE.get(eb_clean)
+        if code:
+            return code
+        # Try prefix match for entries like "1st Preference"
+        for ordinal, mapped_code in _EB_ORDINAL_TO_CODE.items():
+            if eb_clean.lower().startswith(ordinal):
+                return mapped_code
+        return eb_clean  # e.g. "Other Workers"
+
+    # Diversity Visa: key per region
+    region = category.get("region")
+    if region:
+        return f"DV-{str(region).strip()}"
+
+    # Legacy / alternate formats
     for key in (
         "visa_category",
         "preference_level",
@@ -40,6 +77,7 @@ def _derive_category_key(category: Dict[str, Any]) -> str:
         value = category.get(key)
         if value:
             return str(value).strip()
+
     # Fallback: deterministic string from sorted items
     return str(sorted(category.items()))
 

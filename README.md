@@ -1,6 +1,6 @@
 # US Visa Bulletin Web Scraper
 
-A Python tool to fetch, parse, and track changes in the US State Department Visa Bulletin. Each run is stored in a local SQLite database, and consecutive runs of the same type are automatically compared to surface changes in cutoff dates.
+A Python tool to fetch, parse, track changes in, and send email notifications for the US State Department Visa Bulletin. Each run is stored in a local SQLite database, and consecutive runs of the same type are automatically compared to surface changes in cutoff dates.
 
 ## Overview
 
@@ -10,16 +10,20 @@ This tool automatically:
 - Saves structured data to JSON format
 - Persists each run to a SQLite database, tagged by run type
 - Compares the current run against the previous run of the same type and reports which cutoff dates advanced, retrogressed, or became current
+- Sends email notifications to subscribers via AWS SES
 
 The codebase is organized into modular components:
 
 | File | Purpose |
 |---|---|
-| **fetch.py** | Main script — HTTP requests, CLI interface, orchestration |
+| **main.py** | Full pipeline — fetch → compare → notify (production entry point) |
+| **fetch.py** | HTTP scraping, HTML fetching, standalone manual runs |
 | **parser.py** | HTML parsing and data extraction |
 | **persist.py** | JSON file I/O |
-| **store.py** | SQLite database — run history and comparison storage |
+| **store.py** | SQLite database — run history, comparisons, and subscriptions |
 | **compare.py** | Diff logic — compares two bulletin results |
+| **notify.py** | Email notifications via AWS SES, with local preview mode |
+| **app.py** | Flask web app — subscription management UI |
 
 ## Installation
 
@@ -37,33 +41,57 @@ No additional packages are required for the database or diff features — `sqlit
 
 ## Usage
 
-### Basic run (saves JSON + records in DB)
+### Full pipeline (recommended for production)
 
 ```bash
-python fetch.py
+python main.py
 ```
 
-### Run with comparison against previous result
+This runs the complete pipeline: fetches the current bulletin as an `official` run, compares it against the previous official run, and notifies subscribers via email.
 
 ```bash
-python fetch.py --compare
+python main.py --no-notify         # Fetch + compare only, skip email
+python main.py --updated-only      # Only email subscribers whose categories changed
+python main.py --print-local       # Save email previews as HTML instead of sending
+python main.py -v --print-local    # Verbose + local preview (useful before SES is set up)
 ```
 
-On first run, prints "No previous run found". On subsequent runs, prints a diff showing which categories changed.
-
-### View run history
+### Manual fetch (standalone)
 
 ```bash
-python fetch.py --history
+python fetch.py                    # Manual scrape (run_type=manual)
+python fetch.py -v --display       # Verbose with summary output
+python fetch.py --compare          # Also compare against previous manual run
+python fetch.py --history          # Show last 10 runs and exit
 ```
+
+### Send / preview emails (standalone)
+
+```bash
+# Preview an email locally (no SES required)
+python notify.py user@email.com --print-local
+
+# Send a test email via SES
+python notify.py user@email.com
+
+# Notify all active subscribers
+python notify.py --all
+
+# Notify only subscribers whose categories changed
+python notify.py --all --updated-only
+
+# Preview all subscriber emails locally
+python notify.py --all --print-local
+```
+
+Local previews are saved as `email_preview_<email>_<timestamp>.html` in the current directory and can be opened directly in a browser.
 
 ### Tag a run by type
 
 ```bash
 python fetch.py --run-type test       # test run — compared only against previous test runs
 python fetch.py --run-type benchmark
-python fetch.py --run-type official   # default
-python fetch.py --run-type manual
+python fetch.py --run-type manual     # default for fetch.py standalone
 ```
 
 Each run type maintains its own history. Comparisons are always within the same type.
@@ -74,7 +102,7 @@ Each run type maintains its own history. Comparisons are always within the same 
 python fetch.py --no-db
 ```
 
-### All options
+### All options — fetch.py
 
 ```
 -o, --output FILE          Output JSON file path (default: visa_bulletin_data.json)
@@ -82,7 +110,7 @@ python fetch.py --no-db
 -v, --verbose              Enable verbose logging
 --display                  Display extracted data summary after saving
 --debug                    Save HTML for inspection if parsing fails
---run-type TYPE            Tag this run: official|test|benchmark|manual (default: official)
+--run-type TYPE            Tag this run: official|test|benchmark|manual (default: manual)
 --db PATH                  SQLite database file path (default: visa_bulletin.db)
 --no-db                    Skip database storage (JSON-only mode)
 --compare                  Compare this run against the previous run of the same type
@@ -90,21 +118,55 @@ python fetch.py --no-db
 -h, --help                 Show help message
 ```
 
-### Examples
+### All options — main.py
+
+```
+--db PATH                  SQLite database file path (default: visa_bulletin.db)
+--no-notify                Skip email notification step
+--updated-only             Only notify subscribers whose categories changed
+--print-local              Save email previews as HTML instead of sending via SES
+-v, --verbose              Enable verbose logging
+-o, --output FILE          Output JSON file path (default: visa_bulletin_data.json)
+```
+
+### All options — notify.py
+
+```
+email                      Email address for test send (positional, optional)
+--all                      Notify all active subscribers
+--updated-only             (with --all) Only notify on changes
+--print-local              Save emails locally instead of sending via SES
+--db PATH                  SQLite database file path (default: visa_bulletin.db)
+```
+
+## Notification System
+
+Email notifications are sent via AWS SES. Configure using environment variables:
+
+| Variable | Required | Description |
+|---|---|---|
+| `SES_FROM_EMAIL` | Yes | Verified sender address in SES |
+| `SES_REGION` | No | AWS region (default: `us-east-1`) |
+| `AWS_ACCESS_KEY_ID` | No* | AWS credentials (not needed with IAM roles) |
+| `AWS_SECRET_ACCESS_KEY` | No* | AWS credentials (not needed with IAM roles) |
+| `APP_BASE_URL` | No | Base URL for unsubscribe links (default: `http://localhost:5000`) |
+
+\* Standard AWS credential chain (environment, `~/.aws/credentials`, IAM role) is respected automatically.
+
+Until SES is configured, use `--print-local` to preview email formatting locally:
 
 ```bash
-# Verbose run with comparison
-python fetch.py -v --compare
-
-# Save with timestamped filename and display summary
-python fetch.py -t --display
-
-# Use a custom DB location
-python fetch.py --db /var/data/visa.db --compare
-
-# Test run without touching the official history
-python fetch.py --run-type test --no-db
+# Preview what a notification would look like
+python main.py --print-local --no-notify  # fetch + compare, save previews
+python notify.py user@email.com --print-local  # test email preview
 ```
+
+### How notification targeting works
+
+The `updated_only` flag controls who receives notifications:
+
+- `updated_only=True` (default with `--updated-only`): only subscribers whose subscribed categories changed receive an email
+- `updated_only=False` (default): all active subscribers receive an email; the subject and body indicate whether their categories changed
 
 ## Database
 
@@ -213,11 +275,22 @@ Dates are formatted as `DD MON YY` (e.g. `"01 JAN 26"`). `"Current"` or `"C"` in
 
 ## Module Reference
 
+### main.py
+- `main()` — full pipeline: fetch (official run) → compare → store comparison → notify
+
 ### fetch.py
-- `scrape_visa_bulletin()` — orchestrates fetch → parse → save → DB record → compare
+- `scrape_visa_bulletin()` — fetches, parses, saves JSON, records in DB; returns `(success, run_id, data)`
 - `fetch_bulletin_page()` — downloads a page
 - `extract_bulletin_url_from_landing_page()` — extracts current bulletin URL
 - `create_argument_parser()` — CLI argument definitions
+
+### notify.py
+- `notify_subscribers()` — dispatches emails to all relevant active subscribers
+- `send_test_email()` — sends a test email to a given address (bypasses subscription check)
+- `build_email_html()` — builds the HTML email body for a subscriber
+- `build_email_subject()` — builds the subject line
+- `send_email_ses()` — sends via AWS SES (placeholder until SES is configured)
+- `print_email_local()` — saves email as HTML file for browser preview
 
 ### parser.py
 - `parse_bulletin_html()` — main parsing entry point (three-tier fallback strategy)
@@ -235,8 +308,12 @@ Dates are formatted as `DD MON YY` (e.g. `"01 JAN 26"`). `"Current"` or `"C"` in
 - `init_db()` — creates tables and indexes (idempotent)
 - `insert_run()` — records a run (success or failure)
 - `get_last_successful_run()` — retrieves the most recent successful run by type
+- `get_run_by_id()` — retrieves a specific run by ID
 - `insert_comparison()` — stores a diff result
 - `get_runs()` — lists runs with optional filtering
+- `upsert_subscription()` — creates or updates a subscription
+- `get_active_subscriptions_for_category()` — finds subscribers for a category
+- `deactivate_subscription()` — unsubscribes via token
 
 ### compare.py
 - `compare_bulletins()` — diffs two parsed bulletin dicts
@@ -254,13 +331,15 @@ python -m unittest tests.test_compare
 python -m unittest tests.test_fetch
 python -m unittest tests.test_parser
 python -m unittest tests.test_persist
+python -m unittest tests.test_notify
+python -m unittest tests.test_main
 python -m unittest tests.test_e2e
 
 # Run with verbose output
 python tests/run_tests.py -v
 ```
 
-The test suite covers 152 tests across all modules. Tests use temporary files and mocks — no network access or real database is required.
+The test suite covers 180+ tests across all modules. Tests use temporary files and mocks — no network access, real database, or AWS credentials are required.
 
 ## Error Handling
 
@@ -276,7 +355,8 @@ Failed runs are still recorded in the database with `success=0` and an `error_me
 
 - **requests** — HTTP client
 - **beautifulsoup4** — HTML parser
-- **lxml** — fast HTML parsing backend (used by beautifulsoup4)
+- **flask** — web framework for the subscription UI
+- **boto3** — AWS SDK for SES email sending (gracefully disabled if not installed)
 - **sqlite3** — database (Python standard library, no installation needed)
 
 ## Notes

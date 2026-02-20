@@ -295,8 +295,8 @@ class TestScrapeVisaBulletinDbIntegration(unittest.TestCase):
         # get_connection used as context manager
         mock_get_conn.return_value.__enter__ = Mock(return_value=Mock())
         mock_get_conn.return_value.__exit__ = Mock(return_value=False)
-        result = scrape_visa_bulletin(use_db=True)
-        self.assertTrue(result)
+        success, _run_id, _data = scrape_visa_bulletin(use_db=True)
+        self.assertTrue(success)
         mock_init_db.assert_called_once()
         mock_insert_run.assert_called_once()
         call_kwargs = mock_insert_run.call_args
@@ -311,8 +311,8 @@ class TestScrapeVisaBulletinDbIntegration(unittest.TestCase):
     ):
         mock_get_conn.return_value.__enter__ = Mock(return_value=Mock())
         mock_get_conn.return_value.__exit__ = Mock(return_value=False)
-        result = scrape_visa_bulletin(use_db=True)
-        self.assertFalse(result)
+        success, _run_id, _data = scrape_visa_bulletin(use_db=True)
+        self.assertFalse(success)
         mock_insert_run.assert_called_once()
         call_kwargs = mock_insert_run.call_args
         # success should be False on failure
@@ -343,8 +343,8 @@ class TestScrapeVisaBulletinDbIntegration(unittest.TestCase):
         mock_conn = Mock()
         mock_get_conn.return_value.__enter__ = Mock(return_value=mock_conn)
         mock_get_conn.return_value.__exit__ = Mock(return_value=False)
-        result = scrape_visa_bulletin(use_db=True, do_compare=True)
-        self.assertTrue(result)
+        success, _run_id, _data = scrape_visa_bulletin(use_db=True, do_compare=True)
+        self.assertTrue(success)
         # get_last_successful_run should have been called
         mock_get_last.assert_called_once()
 
