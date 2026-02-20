@@ -24,6 +24,8 @@ The codebase is organized into modular components:
 | **compare.py** | Diff logic — compares two bulletin results |
 | **notify.py** | Email notifications via AWS SES, with local preview mode |
 | **app.py** | Flask web app — subscription management UI |
+| **static/email_body.html** | Jinja2 template for the notification email body |
+| **static/email_preview.html** | Jinja2 template for the browser preview wrapper |
 
 ## Installation
 
@@ -319,10 +321,10 @@ Dates are formatted as `DD MON YY` (e.g. `"01 JAN 26"`). `"Current"` or `"C"` in
 ### notify.py
 - `notify_subscribers()` — dispatches emails to all relevant active subscribers
 - `send_test_email()` — sends a test email to a given address (bypasses subscription check)
-- `build_email_html()` — builds the HTML email body for a subscriber
+- `build_email_html()` — renders `static/email_body.html` with subscriber and bulletin data
 - `build_email_subject()` — builds the subject line
 - `send_email_ses()` — sends via AWS SES (placeholder until SES is configured)
-- `print_email_local()` — saves email as HTML file for browser preview
+- `print_email_local()` — renders `static/email_preview.html` and saves it for browser preview
 
 ### parser.py
 - `parse_bulletin_html()` — main parsing entry point (three-tier fallback strategy)

@@ -23,11 +23,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from jinja2 import Environment, FileSystemLoader
+
 from store import (
     DEFAULT_DB_PATH,
     get_connection,
     get_last_successful_run,
     init_db,
+)
+
+_TEMPLATE_DIR = Path(__file__).parent / "static"
+_jinja_env = Environment(
+    loader=FileSystemLoader(str(_TEMPLATE_DIR)),
+    autoescape=True,
 )
 
 try:
@@ -368,66 +376,19 @@ def build_email_html(
         summary_text = "No changes detected since the previous bulletin."
         summary_colour = "#16a34a"
 
-    prev_bulletin_line = (
-        f"<br>Previous: <strong>{prev_date}</strong>" if prev_date else ""
-    )
-
     categories_table = "\n".join(category_rows_html) if category_rows_html else (
         '<tr><td colspan="4" style="padding:12px;color:#9ca3af;">No subscribed categories.</td></tr>'
     )
 
-    return f"""
-<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;color:#1f2937;">
-
-  <!-- Header -->
-  <div style="background:#1e40af;padding:24px;border-radius:8px 8px 0 0;">
-    <h1 style="margin:0;color:#ffffff;font-size:20px;">Visa Bulletin Update</h1>
-    <p style="margin:4px 0 0;color:#bfdbfe;font-size:14px;">
-      Current: <strong>{bulletin_date}</strong>{prev_bulletin_line}
-    </p>
-  </div>
-
-  <!-- Summary banner -->
-  <div style="background:#f9fafb;border-left:4px solid {summary_colour};
-              padding:12px 16px;margin:0;border-right:1px solid #e5e7eb;">
-    <p style="margin:0;color:{summary_colour};font-weight:bold;">{summary_text}</p>
-  </div>
-
-  <!-- Your categories -->
-  <div style="border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;
-              overflow:hidden;">
-    <div style="padding:12px 16px;background:#f3f4f6;border-bottom:1px solid #e5e7eb;">
-      <h2 style="margin:0;font-size:15px;color:#374151;">Your Subscribed Categories</h2>
-    </div>
-    <table style="width:100%;border-collapse:collapse;font-size:14px;">
-      <thead>
-        <tr style="background:#f9fafb;">
-          <th style="padding:8px 12px;text-align:left;color:#6b7280;
-                     font-weight:600;border-bottom:1px solid #e5e7eb;">Field</th>
-          <th style="padding:8px 12px;text-align:left;color:#6b7280;
-                     font-weight:600;border-bottom:1px solid #e5e7eb;">Current Date</th>
-          <th style="padding:8px 12px;text-align:left;color:#6b7280;
-                     font-weight:600;border-bottom:1px solid #e5e7eb;">Change</th>
-        </tr>
-      </thead>
-      <tbody>
-        {categories_table}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Footer -->
-  <div style="padding:16px;text-align:center;color:#9ca3af;font-size:12px;">
-    <p style="margin:0 0 4px;">
-      You're receiving this because you subscribed to visa bulletin updates.
-    </p>
-    <p style="margin:0;">
-      <a href="{unsubscribe_url}" style="color:#6b7280;">Unsubscribe</a>
-    </p>
-  </div>
-
-</div>
-"""
+    template = _jinja_env.get_template("email_body.html")
+    return template.render(
+        bulletin_date=bulletin_date,
+        prev_date=prev_date,
+        summary_colour=summary_colour,
+        summary_text=summary_text,
+        categories_table=categories_table,
+        unsubscribe_url=unsubscribe_url,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -457,26 +418,8 @@ def print_email_local(
     filename = f"email_preview_{safe_email}_{timestamp}.html"
     output_path = Path(output_dir) / filename
 
-    full_html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{subject}</title>
-  <meta name="x-preview-to" content="{to_addr}">
-  <meta name="x-preview-subject" content="{subject}">
-  <style>body {{ margin: 32px; background: #f3f4f6; }}</style>
-</head>
-<body>
-  <div style="margin-bottom:16px;padding:12px;background:#fff3cd;border:1px solid #ffc107;
-              border-radius:4px;font-family:monospace;font-size:12px;">
-    <strong>Preview</strong> &nbsp;|&nbsp;
-    To: {to_addr} &nbsp;|&nbsp;
-    Subject: {subject}
-  </div>
-  {html_body}
-</body>
-</html>"""
+    template = _jinja_env.get_template("email_preview.html")
+    full_html = template.render(subject=subject, to_addr=to_addr, html_body=html_body)
 
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)

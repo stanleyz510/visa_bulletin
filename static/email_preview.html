@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ subject }}</title>
+  <meta name="x-preview-to" content="{{ to_addr }}">
+  <meta name="x-preview-subject" content="{{ subject }}">
+  <style>body { margin: 32px; background: #f3f4f6; }</style>
+</head>
+<body>
+  <div style="margin-bottom:16px;padding:12px;background:#fff3cd;border:1px solid #ffc107;
+              border-radius:4px;font-family:monospace;font-size:12px;">
+    <strong>Preview</strong> &nbsp;|&nbsp;
+    To: {{ to_addr }} &nbsp;|&nbsp;
+    Subject: {{ subject }}
+  </div>
+  {{ html_body | safe }}
+</body>
+</html>
