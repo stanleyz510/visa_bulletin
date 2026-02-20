@@ -96,6 +96,37 @@ python fetch.py --run-type manual     # default for fetch.py standalone
 
 Each run type maintains its own history. Comparisons are always within the same type.
 
+### Database management (store.py)
+
+Inspect run history and subscriptions directly without opening a sqlite3 shell:
+
+```bash
+# List runs
+python store.py runs                           # last 20 runs (all types)
+python store.py runs --type official           # filter by run type
+python store.py runs --limit 50               # custom limit
+python store.py runs --success-only           # only successful runs
+python store.py runs --deleted                # include soft-deleted runs
+
+# Inspect a specific run
+python store.py run 20260218201515001         # show metadata + full bulletin data
+
+# Soft-delete a run (marks is_deleted=1; data is preserved)
+python store.py delete 20260218201515001
+
+# List subscribers
+python store.py subscribers                   # last 20 active subscribers
+python store.py subscribers --all             # include inactive
+python store.py subscribers --limit 50
+
+# Custom database path
+python store.py --db /path/to/other.db runs
+```
+
+Soft-deleted runs are hidden from normal listings and are skipped during comparison
+(`get_last_successful_run` ignores them). They can be revealed with `--deleted` and
+their data is never removed from the database.
+
 ### JSON-only mode (skip database)
 
 ```bash
@@ -188,6 +219,7 @@ Run history is stored in `visa_bulletin.db` (SQLite, single file).
 | `data_json` | Full parser output as compact JSON |
 | `error_message` | Populated on failure |
 | `categories_count` | Number of categories extracted |
+| `is_deleted` | `1` = soft-deleted (hidden from normal queries, data preserved) |
 
 **`comparisons`** — one row per diff between two consecutive successful runs of the same type
 
@@ -305,15 +337,18 @@ Dates are formatted as `DD MON YY` (e.g. `"01 JAN 26"`). `"Current"` or `"C"` in
 - `format_data_for_display()` — formats data for terminal output
 
 ### store.py
-- `init_db()` — creates tables and indexes (idempotent)
+- `init_db()` — creates tables and indexes (idempotent); migrates `is_deleted` on existing databases
 - `insert_run()` — records a run (success or failure)
-- `get_last_successful_run()` — retrieves the most recent successful run by type
-- `get_run_by_id()` — retrieves a specific run by ID
+- `get_last_successful_run()` — retrieves the most recent non-deleted successful run by type
+- `get_run_by_id()` — retrieves a specific run by ID (including deleted)
+- `soft_delete_run()` — marks a run as deleted (`is_deleted=1`); data is preserved
 - `insert_comparison()` — stores a diff result
-- `get_runs()` — lists runs with optional filtering
+- `get_runs()` — lists runs with optional type/success/deleted filtering
+- `get_subscriptions()` — lists subscriptions with optional active-only filtering
 - `upsert_subscription()` — creates or updates a subscription
 - `get_active_subscriptions_for_category()` — finds subscribers for a category
 - `deactivate_subscription()` — unsubscribes via token
+- `main()` — CLI entry point (`python store.py runs|run|delete|subscribers`)
 
 ### compare.py
 - `compare_bulletins()` — diffs two parsed bulletin dicts

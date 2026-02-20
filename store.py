@@ -5,8 +5,10 @@ Persists run results by run type, enabling historical comparison and future
 subscription/notification features.
 """
 
+import argparse
 import json
 import sqlite3
+import sys
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -26,6 +28,7 @@ CREATE TABLE IF NOT EXISTS runs (
     data_json        TEXT,
     error_message    TEXT,
     categories_count INTEGER,
+    is_deleted       INTEGER NOT NULL DEFAULT 0,
     CONSTRAINT chk_run_type CHECK (run_type IN ('official','test','benchmark','manual'))
 );
 
@@ -90,6 +93,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH, verbose: bool = False) -> None:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.commit()
             conn.executescript(_SCHEMA_SQL)
+            # Migration: add is_deleted to runs for databases created before this column existed.
+            try:
+                conn.execute(
+                    "ALTER TABLE runs ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists — nothing to do.
         finally:
             conn.close()
         if verbose:
@@ -224,7 +235,7 @@ def get_last_successful_run(
             row = conn.execute(
                 """
                 SELECT * FROM runs
-                WHERE run_type = ? AND success = 1 AND id != ?
+                WHERE run_type = ? AND success = 1 AND is_deleted = 0 AND id != ?
                 ORDER BY started_at DESC LIMIT 1
                 """,
                 (run_type, exclude_run_id),
@@ -233,7 +244,7 @@ def get_last_successful_run(
             row = conn.execute(
                 """
                 SELECT * FROM runs
-                WHERE run_type = ? AND success = 1
+                WHERE run_type = ? AND success = 1 AND is_deleted = 0
                 ORDER BY started_at DESC LIMIT 1
                 """,
                 (run_type,),
@@ -340,6 +351,7 @@ def get_runs(
     run_type: Optional[str] = None,
     limit: int = 20,
     success_only: bool = False,
+    include_deleted: bool = False,
     verbose: bool = False,
 ) -> List[Dict[str, Any]]:
     """
@@ -350,6 +362,7 @@ def get_runs(
         run_type: Filter by type; None returns all types
         limit: Maximum number of rows to return
         success_only: If True, only return successful runs
+        include_deleted: If True, include soft-deleted runs (default: False)
         verbose: Enable verbose logging
 
     Returns:
@@ -363,11 +376,13 @@ def get_runs(
             params.append(run_type)
         if success_only:
             conditions.append("success = 1")
+        if not include_deleted:
+            conditions.append("is_deleted = 0")
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         params.append(limit)
         rows = conn.execute(
             f"SELECT id, run_type, started_at, completed_at, success, "  # noqa: S608
-            f"bulletin_date, source_url, error_message, categories_count "
+            f"bulletin_date, source_url, error_message, categories_count, is_deleted "
             f"FROM runs {where} ORDER BY started_at DESC LIMIT ?",
             params,
         ).fetchall()
@@ -511,6 +526,71 @@ def get_active_subscriptions_for_category(
     return result
 
 
+def get_subscriptions(
+    conn: sqlite3.Connection,
+    active_only: bool = True,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    List subscriptions in reverse chronological order.
+
+    Args:
+        conn: Active SQLite connection
+        active_only: If True (default), only return active subscriptions
+        limit: Maximum number of rows to return
+
+    Returns:
+        List of dicts with 'categories' as a Python list
+    """
+    conditions = []
+    if active_only:
+        conditions.append("is_active = 1")
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    rows = conn.execute(
+        f"SELECT id, email, categories, subscribed_at, updated_at, is_active "  # noqa: S608
+        f"FROM subscriptions {where} ORDER BY subscribed_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["categories"] = json.loads(d["categories"])
+        result.append(d)
+    return result
+
+
+def soft_delete_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+    verbose: bool = False,
+) -> bool:
+    """
+    Mark a run as deleted (is_deleted = 1). The row and its data are preserved.
+
+    Deleted runs are excluded from get_runs() and get_last_successful_run() by default,
+    so they no longer participate in comparisons or history listings unless explicitly
+    requested with include_deleted=True.
+
+    Args:
+        conn: Active SQLite connection
+        run_id: ID of the run to mark as deleted
+        verbose: Enable verbose logging
+
+    Returns:
+        True if the run was found and marked deleted, False if not found or already deleted.
+    """
+    row = conn.execute(
+        "SELECT id FROM runs WHERE id = ? AND is_deleted = 0", (run_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    conn.execute("UPDATE runs SET is_deleted = 1 WHERE id = ?", (run_id,))
+    conn.commit()
+    if verbose:
+        print(f"[STORE] Run {run_id} marked as deleted.")
+    return True
+
+
 def deactivate_subscription(
     conn: sqlite3.Connection,
     unsubscribe_token: str,
@@ -535,3 +615,202 @@ def deactivate_subscription(
     result = dict(row)
     result["categories"] = json.loads(result["categories"])
     return result
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+
+
+def _print_runs_table(runs: List[Dict[str, Any]]) -> None:
+    if not runs:
+        print("No runs found.")
+        return
+    header = (
+        f"{'ID':<20}  {'TYPE':<10}  {'STATUS':<8}  {'DEL':<4}  "
+        f"{'BULLETIN':<20}  STARTED"
+    )
+    print(header)
+    print("-" * len(header))
+    for r in runs:
+        status = "success" if r["success"] else "failure"
+        deleted = "yes" if r.get("is_deleted") else ""
+        bulletin = r["bulletin_date"] or "(none)"
+        print(
+            f"{r['id']:<20}  {r['run_type']:<10}  {status:<8}  {deleted:<4}  "
+            f"{bulletin:<20}  {r['started_at']}"
+        )
+
+
+def _print_subscriptions_table(subs: List[Dict[str, Any]]) -> None:
+    if not subs:
+        print("No subscriptions found.")
+        return
+    header = (
+        f"{'ID':<20}  {'EMAIL':<30}  {'ACTIVE':<7}  {'CATEGORIES':<30}  SUBSCRIBED"
+    )
+    print(header)
+    print("-" * len(header))
+    for s in subs:
+        active = "yes" if s["is_active"] else "no"
+        cats = ", ".join(s["categories"])
+        print(
+            f"{s['id']:<20}  {s['email']:<30}  {active:<7}  {cats:<30}  "
+            f"{s['subscribed_at']}"
+        )
+
+
+def _cmd_runs(args: argparse.Namespace) -> None:
+    init_db(args.db)
+    with get_connection(args.db) as conn:
+        runs = get_runs(
+            conn,
+            run_type=args.type,
+            limit=args.limit,
+            success_only=args.success_only,
+            include_deleted=args.include_deleted,
+        )
+    _print_runs_table(runs)
+
+
+def _cmd_run(args: argparse.Namespace) -> None:
+    from persist import format_data_for_display  # local import — persist doesn't import store
+
+    run = get_run_by_id(args.id, db_path=args.db)
+    if run is None:
+        print(f"[ERROR] No run found with id={args.id}")
+        sys.exit(1)
+
+    status_str = "success" if run["success"] else "failure"
+    deleted_str = "yes" if run.get("is_deleted") else "no"
+    print(f"Run {run['id']}")
+    print("-" * 40)
+    print(f"  Type:         {run['run_type']}")
+    print(f"  Status:       {status_str}")
+    print(f"  Deleted:      {deleted_str}")
+    print(f"  Bulletin:     {run['bulletin_date'] or '(none)'}")
+    print(f"  Started:      {run['started_at']}")
+    print(f"  Completed:    {run.get('completed_at') or '(none)'}")
+    print(f"  Categories:   {run.get('categories_count') or '(none)'}")
+    print(f"  Source URL:   {run.get('source_url') or '(none)'}")
+    if run.get("error_message"):
+        print(f"  Error:        {run['error_message']}")
+
+    if run.get("data"):
+        print()
+        print("=" * 60)
+        print("DATA")
+        print("=" * 60)
+        print(format_data_for_display(run["data"]))
+    else:
+        print("\n  (no bulletin data stored)")
+
+
+def _cmd_delete(args: argparse.Namespace) -> None:
+    init_db(args.db)
+    with get_connection(args.db) as conn:
+        found = soft_delete_run(conn, args.id, verbose=True)
+    if not found:
+        print(f"[ERROR] Run {args.id} not found or already deleted.")
+        sys.exit(1)
+    print(f"Run {args.id} marked as deleted (data preserved).")
+
+
+def _cmd_subscribers(args: argparse.Namespace) -> None:
+    init_db(args.db)
+    with get_connection(args.db) as conn:
+        subs = get_subscriptions(conn, active_only=not args.all, limit=args.limit)
+    _print_subscriptions_table(subs)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Inspect and manage the visa bulletin SQLite database."""
+    parser = argparse.ArgumentParser(
+        description="Inspect and manage the visa bulletin SQLite database.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python store.py runs                           List last 20 runs (all types)
+  python store.py runs --type official           Filter by run type
+  python store.py runs --limit 50 --deleted      Include soft-deleted runs
+  python store.py runs --success-only            Only successful runs
+  python store.py run 20260218201515001          Show full data for a run
+  python store.py delete 20260218201515001       Soft-delete a run (data preserved)
+  python store.py subscribers                    List last 20 active subscribers
+  python store.py subscribers --all              Include inactive subscribers
+        """,
+    )
+    parser.add_argument(
+        "--db",
+        type=str,
+        default=DEFAULT_DB_PATH,
+        help=f"SQLite database file path (default: {DEFAULT_DB_PATH})",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    # --- runs ---
+    runs_p = subparsers.add_parser("runs", help="List runs")
+    runs_p.add_argument(
+        "--type",
+        dest="type",
+        choices=["official", "test", "benchmark", "manual"],
+        default=None,
+        help="Filter by run type",
+    )
+    runs_p.add_argument(
+        "--limit", type=int, default=20, help="Max rows to show (default: 20)"
+    )
+    runs_p.add_argument(
+        "--success-only",
+        dest="success_only",
+        action="store_true",
+        help="Only show successful runs",
+    )
+    runs_p.add_argument(
+        "--deleted",
+        dest="include_deleted",
+        action="store_true",
+        help="Include soft-deleted runs",
+    )
+    runs_p.set_defaults(func=_cmd_runs)
+
+    # --- run ---
+    run_p = subparsers.add_parser("run", help="Show details and bulletin data for one run")
+    run_p.add_argument("id", type=int, help="Run ID")
+    run_p.set_defaults(func=_cmd_run)
+
+    # --- delete ---
+    del_p = subparsers.add_parser(
+        "delete", help="Soft-delete a run (marks is_deleted=1, preserves data)"
+    )
+    del_p.add_argument("id", type=int, help="Run ID to soft-delete")
+    del_p.set_defaults(func=_cmd_delete)
+
+    # --- subscribers ---
+    subs_p = subparsers.add_parser("subscribers", help="List subscriptions")
+    subs_p.add_argument(
+        "--all",
+        dest="all",
+        action="store_true",
+        help="Include inactive subscriptions",
+    )
+    subs_p.add_argument(
+        "--limit", type=int, default=20, help="Max rows to show (default: 20)"
+    )
+    subs_p.set_defaults(func=_cmd_subscribers)
+
+    args = parser.parse_args()
+    if args.command is None:
+        parser.print_help()
+        sys.exit(0)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
