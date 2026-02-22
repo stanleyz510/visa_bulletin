@@ -22,21 +22,97 @@
       background: #fff;
       border-radius: 10px;
       box-shadow: 0 2px 16px rgba(0,0,0,.10);
+      border-top: 3px solid #3b82f6;
       max-width: 560px;
       width: 100%;
       padding: 2rem 2.5rem;
     }
 
+    .header-row {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      margin-bottom: .35rem;
+    }
+
+    .header-row svg {
+      flex-shrink: 0;
+      color: #3b82f6;
+    }
+
     h1 {
       font-size: 1.45rem;
       font-weight: 700;
-      margin-bottom: .35rem;
     }
 
     .subtitle {
       font-size: .9rem;
       color: #6b7280;
+      margin-bottom: 1.25rem;
+      line-height: 1.55;
+    }
+
+    .how-it-works {
+      display: flex;
+      gap: .5rem;
       margin-bottom: 1.75rem;
+      background: #f8faff;
+      border: 1px solid #e0eaff;
+      border-radius: 8px;
+      padding: .85rem 1rem;
+    }
+
+    .how-step {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: .3rem;
+      position: relative;
+    }
+
+    .how-step:not(:last-child)::after {
+      content: '→';
+      position: absolute;
+      right: -.4rem;
+      top: .5rem;
+      color: #93c5fd;
+      font-size: .85rem;
+    }
+
+    .how-step svg {
+      color: #3b82f6;
+    }
+
+    .how-step span {
+      font-size: .75rem;
+      color: #6b7280;
+      line-height: 1.3;
+    }
+
+    .privacy-note {
+      display: flex;
+      align-items: center;
+      gap: .3rem;
+      font-size: .78rem;
+      color: #9ca3af;
+      margin-top: -.9rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .privacy-note svg {
+      flex-shrink: 0;
+      color: #9ca3af;
+    }
+
+    .card-footer {
+      margin-top: 1.2rem;
+      padding-top: .9rem;
+      border-top: 1px solid #f3f4f6;
+      text-align: center;
+      font-size: .78rem;
+      color: #9ca3af;
     }
 
     label.field-label {
@@ -145,12 +221,39 @@
 </head>
 <body>
 <div class="card">
-  <h1>Visa Bulletin Notifications</h1>
-  <p class="subtitle">Get notified when cutoff dates change for the categories you care about.</p>
+  <div class="header-row">
+    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    </svg>
+    <h1>Visa Bulletin Notifications</h1>
+  </div>
+  <p class="subtitle">
+    Leave your email and select the visa categories you want to track.
+    We'll send you a notification the moment any cutoff dates are updated in the monthly bulletin.
+  </p>
+
+  <div class="how-it-works" aria-label="How it works">
+    <div class="how-step">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+      <span>Enter your email &amp; pick categories</span>
+    </div>
+    <div class="how-step">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <span>We monitor each bulletin release</span>
+    </div>
+    <div class="how-step">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span>You get an email when dates change</span>
+    </div>
+  </div>
 
   <form id="sub-form" novalidate>
     <label class="field-label" for="email">Email address</label>
     <input type="email" id="email" name="email" placeholder="you@example.com" required autocomplete="email">
+    <p class="privacy-note">
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      Your email will never be shared or sold to any third party.
+    </p>
 
     <label class="field-label">Visa categories to watch</label>
     <div class="category-groups">
@@ -234,6 +337,7 @@
   </form>
 
   <div id="result" role="alert"></div>
+  <p class="card-footer">You can unsubscribe at any time — no questions asked.</p>
 </div>
 
 <script>
