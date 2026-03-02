@@ -33,7 +33,7 @@ from store import (
     upsert_subscription,
 )
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder=".")
 
 # Set at startup by main()
 _DB_PATH = DEFAULT_DB_PATH

@@ -32,7 +32,7 @@ from store import (
     init_db,
 )
 
-_TEMPLATE_DIR = Path(__file__).parent / "static"
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
 _jinja_env = Environment(
     loader=FileSystemLoader(str(_TEMPLATE_DIR)),
     autoescape=True,
