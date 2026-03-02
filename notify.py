@@ -2,12 +2,12 @@
 """
 Email notification module for the Visa Bulletin tracker.
 
-Builds HTML emails and dispatches them via AWS SES (or saves locally for preview).
-SES credentials are read from environment variables; the module gracefully degrades
+Builds HTML emails and dispatches them via Resend (or saves locally for preview).
+Credentials are read from config.py (gitignored); the module gracefully degrades
 when they are not yet configured (use --print-local to test formatting).
 
 Standalone usage:
-    python notify.py user@email.com                   # Send test email via SES
+    python notify.py user@email.com                   # Send test email via Resend
     python notify.py user@email.com --print-local     # Save as HTML for browser preview
     python notify.py --all                            # Notify all active subscribers
     python notify.py --all --updated-only             # Only subscribers with changes
@@ -38,22 +38,10 @@ _jinja_env = Environment(
     autoescape=True,
 )
 
-try:
-    import boto3
-    from botocore.exceptions import BotoCoreError, ClientError
-    _BOTO3_AVAILABLE = True
-except ImportError:
-    _BOTO3_AVAILABLE = False
-    BotoCoreError = Exception  # type: ignore[assignment,misc]
-    ClientError = Exception    # type: ignore[assignment,misc]
-
-
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_FROM_EMAIL: str = os.environ.get("SES_FROM_EMAIL", "")
-DEFAULT_SES_REGION: str = os.environ.get("SES_REGION", "us-east-1")
 APP_BASE_URL: str = os.environ.get("APP_BASE_URL", "http://localhost:5000")
 
 # All valid subscription categories (mirrors app.py VALID_CATEGORIES)
@@ -189,14 +177,24 @@ def _get_changed_category_keys(comparison: Dict[str, Any]) -> Set[str]:
     return changed
 
 
-def _build_config_from_env() -> Dict[str, Any]:
-    """Read SES configuration from environment variables."""
-    return {
-        "from_email": os.environ.get("SES_FROM_EMAIL", ""),
-        "region": os.environ.get("SES_REGION", "us-east-1"),
-        "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
-        "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+def _load_config() -> Dict[str, Any]:
+    """Load Resend config from config.py (gitignored), falling back to env vars."""
+    cfg: Dict[str, Any] = {
+        "resend_api_key": os.environ.get("RESEND_API_KEY", ""),
+        "from_email": os.environ.get("FROM_EMAIL", ""),
     }
+    try:
+        import config as _cfg  # local config.py (gitignored)
+        if hasattr(_cfg, "RESEND_API_KEY"):
+            cfg["resend_api_key"] = _cfg.RESEND_API_KEY
+        if hasattr(_cfg, "FROM_EMAIL"):
+            cfg["from_email"] = _cfg.FROM_EMAIL
+        if hasattr(_cfg, "APP_BASE_URL"):
+            global APP_BASE_URL
+            APP_BASE_URL = _cfg.APP_BASE_URL
+    except ImportError:
+        pass
+    return cfg
 
 
 def _empty_comparison(current_bulletin: Dict[str, Any]) -> Dict[str, Any]:
@@ -431,68 +429,63 @@ def print_email_local(
         return None
 
 
-def send_email_ses(
+def send_email(
     to_addr: str,
     subject: str,
     html_body: str,
     config: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
-    Send an email via AWS SES.
+    Send an email via Resend.
 
-    NOTE: AWS SES is not yet configured. This function returns False until
-    SES_FROM_EMAIL and AWS credentials are set. Use --print-local in the
-    meantime to preview email formatting.
+    Reads RESEND_API_KEY and FROM_EMAIL from config.py (or environment variables).
+    Use --print-local to preview formatting without sending.
 
     Args:
         to_addr: Recipient email address
         subject: Email subject line
         html_body: HTML email body
-        config: Optional dict with keys: from_email, region, aws_access_key_id,
-                aws_secret_access_key. Falls back to environment variables.
+        config: Optional dict with keys: resend_api_key, from_email.
+                Falls back to config.py / environment variables.
 
     Returns:
         True if sent successfully, False otherwise
     """
-    if not _BOTO3_AVAILABLE:
-        print("[NOTIFY] boto3 is not installed. Run: pip install boto3")
+    try:
+        import resend
+    except ImportError:
+        print("[NOTIFY] resend is not installed. Run: pip install resend")
         return False
 
-    cfg = config or {}
-    from_email = cfg.get("from_email") or DEFAULT_FROM_EMAIL
-    region = cfg.get("region") or DEFAULT_SES_REGION
-    aws_key = cfg.get("aws_access_key_id") or os.environ.get("AWS_ACCESS_KEY_ID")
-    aws_secret = cfg.get("aws_secret_access_key") or os.environ.get("AWS_SECRET_ACCESS_KEY")
+    cfg = config if config is not None else _load_config()
+    api_key = cfg.get("resend_api_key", "")
+    from_email = cfg.get("from_email", "")
 
+    if not api_key:
+        print(
+            "[NOTIFY] RESEND_API_KEY is not configured. "
+            "Set it in config.py or use --print-local to preview emails."
+        )
+        return False
     if not from_email:
         print(
-            "[NOTIFY] SES_FROM_EMAIL is not configured. "
-            "Set it in the environment or use --print-local to preview emails."
+            "[NOTIFY] FROM_EMAIL is not configured. "
+            "Set it in config.py or use --print-local to preview emails."
         )
         return False
 
     try:
-        ses_kwargs: Dict[str, Any] = {"region_name": region}
-        if aws_key and aws_secret:
-            ses_kwargs["aws_access_key_id"] = aws_key
-            ses_kwargs["aws_secret_access_key"] = aws_secret
-
-        client = boto3.client("ses", **ses_kwargs)
-        client.send_email(
-            Source=from_email,
-            Destination={"ToAddresses": [to_addr]},
-            Message={
-                "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": {"Html": {"Data": html_body, "Charset": "UTF-8"}},
-            },
-        )
+        resend.api_key = api_key
+        resend.Emails.send({
+            "from": from_email,
+            "to": [to_addr],
+            "subject": subject,
+            "html": html_body,
+        })
         print(f"[NOTIFY] Email sent to {to_addr}")
         return True
-    except (BotoCoreError, ClientError) as e:
-        print(f"[NOTIFY] SES send failed for {to_addr}: {e}")
-        return False
     except Exception as e:
-        print(f"[NOTIFY] Unexpected error sending to {to_addr}: {e}")
+        print(f"[NOTIFY] Failed to send email to {to_addr}: {e}")
         return False
 
 
@@ -518,8 +511,8 @@ def notify_subscribers(
                       changed. If False, notify all subscribers (noting in the email
                       whether their categories changed).
         db_path: Path to SQLite database
-        config: SES config dict (from_email, region, etc.)
-        dry_run: If True, save HTML locally instead of sending via SES
+        config: Resend config dict (resend_api_key, from_email)
+        dry_run: If True, save HTML locally instead of sending via Resend
 
     Returns:
         Dict with keys: sent, skipped, failed (all int)
@@ -562,7 +555,7 @@ def notify_subscribers(
                 else:
                     stats["failed"] += 1
             else:
-                ok = send_email_ses(subscription["email"], subject, html_body, config)
+                ok = send_email(subscription["email"], subject, html_body, config)
                 if ok:
                     stats["sent"] += 1
                 else:
@@ -588,8 +581,8 @@ def send_test_email(
     Args:
         email: Recipient email address
         db_path: Path to SQLite database
-        config: SES config dict
-        dry_run: If True, save locally instead of sending via SES
+        config: Resend config dict (resend_api_key, from_email)
+        dry_run: If True, save locally instead of sending via Resend
 
     Returns:
         True if sent/saved successfully, False otherwise
@@ -647,7 +640,7 @@ def send_test_email(
             result = print_email_local(email, subject, html_body)
             return result is not None
         else:
-            return send_email_ses(email, subject, html_body, config)
+            return send_email(email, subject, html_body, config)
     except Exception as e:
         print(f"[NOTIFY] Failed to build/send test email: {e}")
         return False
@@ -663,7 +656,7 @@ def _create_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python notify.py user@email.com                     Send test email via SES
+  python notify.py user@email.com                     Send test email via Resend
   python notify.py user@email.com --print-local       Save test email as HTML
   python notify.py --all                              Notify all subscribers
   python notify.py --all --updated-only               Only notify on changes
@@ -688,7 +681,7 @@ Examples:
     parser.add_argument(
         "--print-local",
         action="store_true",
-        help="Save emails as HTML files instead of sending via SES",
+        help="Save emails as HTML files instead of sending via Resend",
     )
     parser.add_argument(
         "--db",
@@ -709,7 +702,7 @@ def main() -> None:
     if args.email and args.all:
         parser.error("Provide either an email address or --all, not both")
 
-    config = _build_config_from_env()
+    config = _load_config()
 
     try:
         init_db(args.db)

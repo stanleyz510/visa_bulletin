@@ -132,6 +132,7 @@ dmypy.json
 *~
 
 # Project specific
+config.py
 visa_bulletin_data.json
 test_output.json
 data/
